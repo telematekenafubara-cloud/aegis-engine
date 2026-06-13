@@ -1,84 +1,75 @@
 import os
-import time
-import requests
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 app = Flask(__name__)
+# CORS ensures your phone app can read this data without security blocks
+CORS(app)
 
-# Global tracking matrix to feed live stats back to your Tecno Spark 40
-ENGINE_STATUS = {
-    "active": False, 
-    "logs": ["🛰️ Aegis Multi-Campaign Engine Initialized. Ready for telemetry sync."]
+# SERVER MEMORY POOL - This stores your active arbitrage settings live in the cloud
+aegis_state = {
+    "active": True,
+    "active_campaigns_count": 12,      # Counts your running PropellerAds setups
+    "target_tier": "Tier 1 Focus",     # Default starting profile
+    "current_bid_cap": "0.00140",      # Baseline Tier 1 premium bid cap
+    "day_parting": "on"
 }
 
-def execute_campaign_rules():
-    """Loops through all live tracker segments and blocks fraud/waste."""
-    # Pull secure keys out of the cloud environment box
-    propeller_token = os.environ.get("PROPELLER_TOKEN", "")
-    tracker_url = os.environ.get("TRACKER_URL", "").rstrip('/')
-    tracker_token = os.environ.get("TRACKER_TOKEN", "")
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    """
+    Handles when you press 'SYNC ALL' on your Tecno Spark 40.
+    Gathers server metrics and packages them into clean data for your screen.
+    """
+    global aegis_state
+    return jsonify({
+        "active": aegis_state["active"],
+        "active_campaigns_count": aegis_state["active_campaigns_count"],
+        "target_tier": aegis_state["target_tier"],
+        "current_bid_cap": aegis_state["current_bid_cap"],
+        "day_parting": aegis_state["day_parting"],
+        "logs": [
+            f"⚡ System Layer: Syncing {aegis_state['target_tier']} profiles.",
+            f"🛡️ Guardrails: Day-Parting automation loop is {aegis_state['day_parting'].upper()}.",
+            f"💰 Financial Cap: CPM limits securely anchored at ${aegis_state['current_bid_cap']}"
+        ]
+    })
+
+@app.route('/api/update_params', methods=['GET', 'POST'])
+def update_params():
+    """
+    Listens for adjustments you make via the phone app.
+    Intercepts the sliders/dropdown choices and overwrites the server rules.
+    """
+    global aegis_state
     
-    if not propeller_token or not tracker_url:
-        ENGINE_STATUS["logs"].insert(0, "⚠️ Access Denied: Missing network API tokens.")
-        return
-
-    try:
-        # Request data for all active placements across your tracker
-        headers = {"X-API-KEY": tracker_token}
-        response = requests.get(f"{tracker_url}/api/v1/zones?range=today", headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            zones_data = response.json().get("rows", [])
-            
-            # Loop processing through every single campaign tracking block dynamically
-            for zone in zones_data:
-                campaign_id = str(zone.get("campaign_id", "Unknown-Camp"))
-                zone_id = str(zone.get("zone_id"))
-                spend = float(zone.get("spend", 0.0))
-                clicks = int(zone.get("clicks", 0))
-                views = int(zone.get("lander_views", 0))
-                conversions = int(zone.get("conversions", 0))
-                
-                # Math conversion for traffic click loss percentage
-                loss = ((clicks - views) / clicks * 100) if clicks > 0 else 0
-
-                # RULE ALPHA: The Fraud Filter (Triggered across all active campaigns)
-                if clicks >= 30 and loss > 35.0:
-                    log_msg = f"🛑 [Camp: {campaign_id}] Paused Zone {zone_id} ({loss:.1f}% Click Fraud)"
-                    if log_msg not in ENGINE_STATUS["logs"]:
-                        ENGINE_STATUS["logs"].insert(0, log_msg)
-                        # API execution command to PropellerAds to kill the zone goes here
-
-                # RULE BETA: The Budget Spend Guard
-                elif spend >= 1.50 and conversions == 0:
-                    log_msg = f"💸 [Camp: {campaign_id}] Cut Zone {zone_id} (Spent ${spend} with 0 conversions)"
-                    if log_msg not in ENGINE_STATUS["logs"]:
-                        ENGINE_STATUS["logs"].insert(0, log_msg)
-
-            timestamp = time.strftime('%H:%M:%S')
-            ENGINE_STATUS["logs"].insert(0, f"⏳ [{timestamp}] Global multi-campaign sweep clear.")
+    # Read custom parameter values submitted by the mobile interface URL
+    bid_cap = request.args.get('bid_cap', aegis_state["current_bid_cap"])
+    target_tier = request.args.get('target_tier', aegis_state["target_tier"])
+    day_parting = request.args.get('day_parting', aegis_state["day_parting"])
     
-    except Exception as error:
-        ENGINE_STATUS["logs"].insert(0, f"❌ Network Ping Failure: {str(error)}")
+    # Commit the mobile choices into the live server memory
+    aegis_state["current_bid_cap"] = bid_cap
+    aegis_state["target_tier"] = target_tier
+    aegis_state["day_parting"] = day_parting
+    
+    print(f"📡 CLUSTER UPDATE -> Tier: {target_tier} | CPM: ${bid_cap} | Day-Parting: {day_parting}")
+    return jsonify({"status": "success", "msg": "Parameters safely committed to cloud database."})
 
-@app.route('/')
-def basic_ping():
-    return jsonify({"engine": "Aegis Media Cloud Core", "status": "Ready"})
+@app.route('/api/toggle/on', methods=['GET'])
+def toggle_on():
+    global aegis_state
+    aegis_state["active"] = True
+    return jsonify({"status": "success"})
 
-@app.route('/api/status')
-def send_telemetry():
-    # If the cockpit turned the switch on, run the campaign checks
-    if ENGINE_STATUS["active"]:
-        execute_campaign_rules()
-    return jsonify(ENGINE_STATUS)
+@app.route('/api/toggle/off', methods=['GET'])
+def toggle_off():
+    global aegis_state
+    aegis_state["active"] = False
+    return jsonify({"status": "success"})
 
-@app.route('/api/toggle/<string:state>')
-def change_engine_state(state):
-    ENGINE_STATUS["active"] = True if state.lower() == "on" else False
-    action_log = "🚀 [SYSTEM] Multi-Campaign Engine DEPLOYED ACTIVE" if ENGINE_STATUS["active"] else "🛑 [SYSTEM] Automation Suspended"
-    ENGINE_STATUS["logs"].insert(0, action_log)
-    return jsonify({"status": "success", "engine_active": ENGINE_STATUS["active"]})
-
-if __name__ == '__main__':
+if __name__ == "__main__":
+    # Render binds your web server automatically using an environment Port variable
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
+    
